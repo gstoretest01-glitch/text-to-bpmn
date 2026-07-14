@@ -1,0 +1,180 @@
+<!-- public/index.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Text-to-BPMN 2.0</title>
+
+  <!-- Fonts -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <!-- BPMN-JS libraries -->
+  <script src="https://unpkg.com/bpmn-js@13.1.0/dist/bpmn-modeler.development.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/bpmn-js@13.1.0/dist/assets/diagram-js.css">
+  <link rel="stylesheet" href="https://unpkg.com/bpmn-js@13.1.0/dist/assets/bpmn-font/css/bpmn.css">
+  <link rel="stylesheet" href="https://unpkg.com/bpmn-js@13.1.0/dist/assets/bpmn-js.css">
+
+  <!-- Icons -->
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/boxicons/2.1.4/css/boxicons.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+
+  <!-- OCR (Tesseract.js) and PDF.js -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@2.1.5/dist/tesseract.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+
+  <!-- Markdown rendering + syntax highlight -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+
+  <!-- custom style -->
+  <link rel="stylesheet" href="/css/style.css">
+
+</head>
+<body>
+  <div class="layout" id="layout">
+    <!-- Sessions Sidebar -->
+    <div class="sessions-sidebar">
+      <div class="sessions-header">
+        <span class="header-title">Conversations</span>
+        <i class="fa-solid fa-comments collapsed-icon" title="Conversations"></i>
+      </div>
+      <button class="new-chat-btn" id="new-chat-btn" title="New Chat">
+        <i class="fa-solid fa-plus"></i>
+        <span class="btn-text">New Chat</span>
+      </button>
+      <div class="sessions-list" id="sessions-list">
+        <!-- Rendered dynamically -->
+      </div>
+      <div class="user-profile-bar" id="user-profile-bar">
+        <!-- Rendered dynamically via JS -->
+      </div>
+    </div>
+
+    <!-- Sidebar (chat interface) -->
+    <div class="sidebar" id="sidebar">
+      <div class="chat-header">Text-to-BPMN 2.0</div>
+      <div id="chat-log" class="chat-log"></div>
+
+      <div class="file-drop-area" id="file-drop-area">
+        <input type="file" id="file-input" multiple accept=".txt,.pdf,image/*">
+        <p>Drag image or .txt/.pdf files here to add to chat</p>
+      </div>
+
+      <div class="input-wrap">
+  <!-- Combined block: textarea and toggle -->
+  <div class="textarea-container">
+    <textarea id="chat-message" rows="1" placeholder="Insert your process description..."></textarea>
+
+    <div class="model-toggle-wrap">
+      <button id="model-toggle" class="model-toggle" type="button" title="Use DeepSeek Reasoner">
+        Reasoner: <span id="model-status">Off</span>
+      </button>
+      <select id="global-model-select" class="global-model-select">
+        <option value="gemini" selected>Gemini</option>
+        <option value="deepseek">DeepSeek</option>
+        <option value="chatgpt">ChatGPT</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- Submit button -->
+  <button id="send-btn" aria-label="Send message">
+    <svg viewBox="0 0 24 24"><path d="M22 2 11 13" stroke-linecap="round" stroke-linejoin="round"/><path d="M22 2 15 22 11 13 2 9 22 2Z" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </button>
+
+      <!-- Input footer (guide) -->
+      <div class="input-footer">
+        <span class="input-hint">Press Shift + Enter for new line</span>
+        <a href="#" class="template-link" id="template-link">Prompt Guide
+          <svg viewBox="0 0 24 24" style="transform: rotate(180deg);"><path d="M7 10l5 5 5-5z" /></svg>
+        </a>
+        <div class="template-popup" id="template-popup">
+          <strong>Prompt Guide:</strong>
+          <ul>
+            <li>Choose first you prefered model.</li>
+            <li>Describe your process clearly</li>
+            <li>Use tasks, events, gateways explicitly.</li>
+            <li>Mention BPMN elements needed.</li>
+            <li>Upload files if necessary.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+    </div>
+
+    <!-- Diagram area -->
+    <div class="diagram-pane">
+      <div class="chat-header">Flowchart</div>
+      <button class="fullscreen-toggle" id="toggleFullscreen">
+        <svg viewBox="0 0 24 24"><path d="M7 14H5v5h5v-2H7v-3zm10 3h-3v2h5v-5h-2v3zM7 7h3V5H5v5h2V7zm10 2h2V5h-5v2h3v2z"/></svg>
+        <span id="fullscreen-label">Expand</span>
+      </button>
+      <div id="canvas"></div>    
+
+      <div class="diagram-toolbar">
+        <div class="button-group">
+          <div class="zoom-group">
+            <button id="zoom-in" title="Zoom In"><i class="fa-solid fa-plus"></i></button>
+            <button id="zoom-out" title="Zoom Out"><i class="fa-solid fa-minus"></i></button>
+            <button id="zoom-reset" title="Reset Zoom"><i class="fa-solid fa-up-right-and-down-left-from-center"></i></button>
+          </div>
+
+          <div class="undo-redo-group">
+            <button id="undo-btn" title="Undo (Ctrl+Z)"><i class="fa-solid fa-rotate-left"></i></button>
+            <button id="redo-btn" title="Redo (Ctrl+Y)"><i class="fa-solid fa-rotate-right"></i></button>
+          </div>
+
+          <button id="aiConsultant" style="display: none;"><i class="fa-solid fa-brain"></i> AI Consultant</button>
+          <button id="processSpec"><i class="fa-solid fa-file-invoice"></i> Đặc tả Quy trình</button>
+        </div>
+        <div class="button-group">
+          <button id="exportSVG"><i class='bx bx-image'></i>Download Image</button>
+          <button id="exportXML"><i class='bx bx-download'></i>Export BPMN</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- main JS logic -->
+  <script src="/js/bundle-app.js?v=3"></script>
+
+  <!-- Authentication Modal -->
+  <div class="auth-modal-overlay" id="auth-modal-overlay" style="display: none;">
+    <div class="auth-modal">
+      <h3 id="auth-modal-title">Đăng Nhập</h3>
+      <form id="auth-form">
+        <div class="auth-input-group">
+          <label for="auth-username">Tên tài khoản</label>
+          <input type="text" id="auth-username" required placeholder="Nhập username...">
+        </div>
+        <div class="auth-input-group">
+          <label for="auth-password">Mật khẩu</label>
+          <input type="password" id="auth-password" required placeholder="Nhập password...">
+        </div>
+        <div class="auth-error-msg" id="auth-error-msg"></div>
+        <button type="submit" id="auth-submit-btn">Đăng Nhập</button>
+        <p class="auth-toggle-text">Chưa có tài khoản? <a href="#" id="auth-toggle-link">Đăng ký ngay</a></p>
+        <p class="auth-cancel-text"><a href="#" id="auth-cancel-link">Tiếp tục với tư cách Khách</a></p>
+      </form>
+    </div>
+  </div>
+
+  <!-- BPMN Preview Modal -->
+  <div class="bpmn-preview-modal-overlay" id="bpmn-preview-modal-overlay" style="display: none;">
+    <div class="bpmn-preview-modal">
+      <div class="bpmn-preview-modal-header">
+        <h3>Xem trước Sơ đồ Tối ưu</h3>
+        <button class="close-btn" id="close-preview-modal-btn">&times;</button>
+      </div>
+      <div class="bpmn-preview-modal-body">
+        <div id="preview-canvas" style="width: 100%; height: 500px; background: #fff; border: 1px solid #cbd5e1; border-radius: 8px;"></div>
+      </div>
+      <div class="bpmn-preview-modal-footer" style="display: flex; justify-content: flex-end; gap: 1rem; padding-top: 1rem;">
+        <button class="new-chat-btn" id="preview-cancel-btn" style="background: #64748b; border-color: #64748b; color: #fff; width: auto; padding: 0.5rem 1.5rem; border-radius: 6px; cursor: pointer; border: none; font-weight: 600;">Hủy bỏ</button>
+        <button class="new-chat-btn" id="preview-apply-btn" style="background: #3b82f6; border-color: #3b82f6; color: #fff; width: auto; padding: 0.5rem 1.5rem; border-radius: 6px; cursor: pointer; border: none; font-weight: 600;">Áp dụng quy trình này</button>
+      </div>
+    </div>
+  </div>
+ </body>
+</html>

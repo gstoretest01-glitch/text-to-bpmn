@@ -1,0 +1,12 @@
+name = "text-to-bpmn-backend"
+main = "worker.js"
+compatibility_date = "2026-07-14"
+
+[vars]
+GEMINI_PROXY_URL = "https://text-to-bpmn20-main.vercel.app"
+
+# Bind Cloudflare D1 SQL Database
+[[d1_databases]]
+binding = "DB"
+database_name = "bpmn-tungnt"
+database_id = "f04064b8-879f-4720-8146-522107194c8e"

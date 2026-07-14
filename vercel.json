@@ -1,0 +1,6 @@
+{
+  "version": 2,
+  "rewrites": [
+    { "source": "/v1beta/models/(.*)", "destination": "/api/proxy" }
+  ]
+}
