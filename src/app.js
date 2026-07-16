@@ -567,8 +567,28 @@ async function callModelAPI(prompt, history, image, currentXml, onDataChunk, isS
   });
 
   if (!response.ok) {
-    const errData = await response.json();
-    throw new Error(errData.details || errData.error || 'Server error');
+    let errMsg = 'Server error';
+    try {
+      const errData = await response.json();
+      if (errData) {
+        if (typeof errData.details === 'string') {
+          errMsg = errData.details;
+        } else if (errData.error) {
+          if (typeof errData.error === 'string') {
+            errMsg = errData.error;
+          } else if (typeof errData.error === 'object') {
+            errMsg = errData.error.message || JSON.stringify(errData.error);
+          }
+        } else if (typeof errData.message === 'string') {
+          errMsg = errData.message;
+        }
+      }
+    } catch (e) {
+      try {
+        errMsg = await response.text();
+      } catch (_) {}
+    }
+    throw new Error(errMsg);
   }
 
   const reader = response.body.getReader();
