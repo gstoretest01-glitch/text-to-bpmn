@@ -28,15 +28,30 @@ app.get('/api/config', (c) => {
 // Route POST: Log lỗi BPMN
 app.post('/api/log-error', async (c) => {
   try {
-    const { error, prompt, xml } = await c.req.json();
+    const { error, prompt, xml, error_type, ai_response, model } = await c.req.json();
     const timestamp = new Date().toISOString();
     
     // Ghi log lỗi ra console của Cloudflare (sẽ hiển thị ở mục Real-time Logs)
-    console.error(`[BPMN-ERROR] ${timestamp} | ERROR: ${error} | PROMPT: ${prompt} | XML Length: ${xml ? xml.length : 0}`);
+    console.error(`[BPMN-ERROR] ${timestamp} | TYPE: ${error_type || 'Unknown'} | ERROR: ${error} | PROMPT: ${prompt}`);
+    
+    // Lưu log vào cơ sở dữ liệu D1
+    await c.env.DB.prepare(
+      "INSERT INTO bpmn_logs (timestamp, error_type, error_message, prompt, ai_response, xml, model) VALUES (?, ?, ?, ?, ?, ?, ?)"
+    )
+    .bind(
+      timestamp,
+      error_type || 'unknown',
+      error || 'Unknown Error',
+      prompt || '',
+      ai_response || '',
+      xml || '',
+      model || ''
+    )
+    .run();
     
     return c.json({ success: true });
   } catch (err) {
-    console.error("Failed to log error:", err);
+    console.error("Failed to log error to D1 database:", err);
     return c.json({ error: "Failed to log error" }, 500);
   }
 });
@@ -376,7 +391,7 @@ app.post('/api/process', async (c) => {
         messages: messages,
         stream: true,
         ...(modelName !== 'o3-2025-04-16' && { temperature: 0.0 }),
-        ...(isOpenRouter && { max_tokens: 4000 })
+        ...(isOpenRouter && { max_tokens: 10000 })
       })
     });
 

@@ -69,19 +69,23 @@ app.get('/api/config', (req, res) => {
 
 app.post('/api/log-error', express.json(), (req, res) => {
   try {
-    const { error, prompt, xml } = req.body;
+    const { error, prompt, xml, error_type, ai_response, model } = req.body;
     const logPath = path.join(__dirname, 'bpmn_errors.log');
     const logEntry = `
 ========================================
 TIMESTAMP: ${new Date().toISOString()}
+TYPE: ${error_type || 'unknown'}
+MODEL: ${model || 'unknown'}
 ERROR: ${error || 'Unknown Error'}
 PROMPT: ${prompt || 'No Prompt Provided'}
+AI RESPONSE:
+${ai_response || 'EMPTY'}
 XML:
 ${xml || 'EMPTY'}
 ========================================
 `;
     fs.appendFileSync(logPath, logEntry, 'utf-8');
-    console.error(`[BPMN-ERROR] Logged error to bpmn_errors.log: ${error}`);
+    console.error(`[BPMN-ERROR] Logged error (${error_type}) to bpmn_errors.log: ${error}`);
     res.json({ success: true });
   } catch (err) {
     console.error("Failed to write to bpmn_errors.log:", err);
@@ -392,7 +396,7 @@ app.post('/api/process', express.json({ limit: '50mb' }), async (req, res) => {
         messages: messages,
         stream: true,
         ...(modelName !== 'o3-2025-04-16' && { temperature: 0.0 }),
-        ...(isOpenRouter && { max_tokens: 4000 })
+        ...(isOpenRouter && { max_tokens: 10000 })
       })
     });
     

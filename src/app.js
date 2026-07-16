@@ -786,24 +786,27 @@ function buildReplyInfo(startTime) {
   return info;
 }
 
-function logBpmnError(errorMsg, prompt, xml) {
+function logBpmnExecution(errorMsg, prompt, xml, errorType = 'success', aiResponse = '', modelName = 'gemini') {
   fetch(`${API_BASE_URL}/api/log-error`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       error: errorMsg,
       prompt: prompt,
-      xml: xml || 'EMPTY'
+      xml: xml || 'EMPTY',
+      error_type: errorType,
+      ai_response: aiResponse,
+      model: modelName
     })
-  }).catch(err => console.error('Failed to log error to backend', err));
+  }).catch(err => console.error('Failed to log execution to backend', err));
 }
 
 /* ─────────── BPMN XML PROCESSING ─────────── */
 
 // Imports BPMN if present and shows the outcome to the user
-async function tryImportBpmn(xml, originalPrompt, originalImage = null) {
+async function tryImportBpmn(xml, originalPrompt, originalImage = null, aiResponse = '', modelName = 'gemini') {
   if (!xml) {
-    logBpmnError('No valid XML found in response', originalPrompt, 'EMPTY');
+    logBpmnExecution('No valid XML found in response', originalPrompt, 'EMPTY', 'invalid_xml', aiResponse, modelName);
     if (!isRetrying) {
       isRetrying = true;
       addBotMessage('⚠️ Sơ đồ không chứa mã XML hợp lệ. Đang tự động yêu cầu AI sửa lại...');
@@ -818,11 +821,12 @@ async function tryImportBpmn(xml, originalPrompt, originalImage = null) {
   try {
     await modeler.importXML(xml);
     addMsg('Diagram generated successfully ✅', 'bot');
+    logBpmnExecution('Success', originalPrompt, xml, 'success', aiResponse, modelName);
     isRetrying = false;
     return true;
   } catch (err) {
     console.error('❌ Errore durante importXML:', err);
-    logBpmnError(err.message, originalPrompt, xml);
+    logBpmnExecution(err.message, originalPrompt, xml, 'syntax_error', aiResponse, modelName);
     if (!isRetrying) {
       isRetrying = true;
       addBotMessage(`⚠️ Sơ đồ chứa lỗi cú pháp (${err.message}). Đang tự động sửa lỗi...`);
@@ -915,8 +919,8 @@ async function sendPrompt(customText = null, imageBase64 = null, isAnalysis = fa
       return;
     }
 
-    const xmlResponse = extractXmlFromResponse(ctx.fullRaw);
-    const importSuccess = await tryImportBpmn(xmlResponse, txt, imageBase64);
+    const model = document.getElementById('global-model-select').value;
+    const importSuccess = await tryImportBpmn(xmlResponse, txt, imageBase64, ctx.fullRaw, model);
 
     if (importSuccess) {
       pushToCustomHistory(xmlResponse);
