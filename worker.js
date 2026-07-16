@@ -187,7 +187,7 @@ app.post('/api/process', async (c) => {
       } else if (modelSelected === 'deepseek') {
         modelName = reasoner ? 'meta-llama/llama-3.3-70b-instruct:free' : 'qwen/qwen-2.5-coder-32b-instruct:free';
       } else if (modelSelected === 'gemini') {
-        modelName = reasoner ? 'google/gemini-2.5-pro' : 'google/gemini-2.5-flash:free';
+        modelName = reasoner ? 'google/gemini-2.5-pro' : 'google/gemini-3.5-flash';
       } else if (modelSelected === 'openrouter-free') {
         modelName = 'openrouter/free';
       }
@@ -217,7 +217,7 @@ app.post('/api/process', async (c) => {
     ];
 
     // Thực hiện gọi API của bên thứ 3
-    if (modelSelected === 'gemini') {
+    if (modelSelected === 'gemini' && !isOpenRouter) {
       const generateMethod = 'streamGenerateContent';
       const proxyBase = c.env.GEMINI_PROXY_URL || 'https://generativelanguage.googleapis.com';
       apiUrl = `${proxyBase}/v1beta/models/${modelName}:${generateMethod}?key=${apiKey}`;
@@ -375,7 +375,8 @@ app.post('/api/process', async (c) => {
         model: modelName,
         messages: messages,
         stream: true,
-        ...(modelName !== 'o3-2025-04-16' && { temperature: 0.0 })
+        ...(modelName !== 'o3-2025-04-16' && { temperature: 0.0 }),
+        ...(isOpenRouter && { max_tokens: 4000 })
       })
     });
 

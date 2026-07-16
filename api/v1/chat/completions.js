@@ -39,14 +39,17 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: 'Failed to read prompt files on Vercel server' });
     }
 
-    // Determine model name
+    // Determine model name and check if using OpenRouter key
+    const isOpenRouter = apiKey.startsWith('sk-or-');
     let geminiModel = reasoner ? 'gemini-pro-latest' : 'gemini-3.5-flash';
-    if (image) {
-      // Automatic vision fallback for images
-      geminiModel = 'meta-llama/llama-3.2-11b-vision-instruct:free'; // Handled by OpenRouter if key is OpenRouter, but since we are calling Gemini API directly, let's use gemini-3.5-flash for images (which supports Vision natively!)
-      if (!geminiModel.startsWith('gemini-')) {
-        geminiModel = 'gemini-3.5-flash';
+    if (isOpenRouter) {
+      geminiModel = reasoner ? 'google/gemini-2.5-pro' : 'google/gemini-3.5-flash';
+      if (image) {
+        geminiModel = 'meta-llama/llama-3.2-11b-vision-instruct:free';
       }
+    } else if (image) {
+      // Automatic vision fallback for images
+      geminiModel = 'gemini-3.5-flash';
     }
 
     // Format final user prompt message
@@ -61,6 +64,48 @@ export default async function handler(req, res) {
         { type: 'text', text: promptText || "Translate this flowchart image to BPMN 2.0 XML." },
         { type: 'image_url', image_url: { url: image } }
       ];
+    }
+
+    if (isOpenRouter) {
+      const openRouterMessages = [
+        { role: 'system', content: systemInstruction },
+        ...(history || []),
+        { role: 'user', content: finalMessageContent }
+      ];
+
+      const googleRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          model: geminiModel,
+          messages: openRouterMessages,
+          stream: true,
+          temperature: 0.0,
+          max_tokens: 4000
+        })
+      });
+
+      if (!googleRes.ok) {
+        const errText = await googleRes.text();
+        return res.status(googleRes.status).send(errText);
+      }
+
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+
+      const reader = googleRes.body.getReader();
+      const decoder = new TextDecoder();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        res.write(value);
+      }
+      res.end();
+      return;
     }
 
     // Translate OpenAI messages to Gemini contents
