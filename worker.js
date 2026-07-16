@@ -376,7 +376,7 @@ app.post('/api/process', async (c) => {
         messages: messages,
         stream: true,
         ...(modelName !== 'o3-2025-04-16' && { temperature: 0.0 }),
-        ...(isOpenRouter && { max_tokens: 4000 })
+        ...(isOpenRouter && { max_tokens: 16000 })
       })
     });
 
