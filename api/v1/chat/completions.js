@@ -84,7 +84,7 @@ export default async function handler(req, res) {
           messages: openRouterMessages,
           stream: true,
           temperature: 0.0,
-          max_tokens: 16000
+          max_tokens: 4000
         })
       });
 
