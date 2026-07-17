@@ -22,6 +22,8 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: 'Missing GEMINI_API_KEY in Vercel configuration' });
     }
 
+    const maxTokens = parseInt(process.env.MAX_TOKENS || '65536', 10);
+
     const { prompt, model, reasoner, history, image, currentXml, isSpec, isConsultant } = req.body;
 
     // Load appropriate prompt text file
@@ -84,7 +86,7 @@ export default async function handler(req, res) {
           messages: openRouterMessages,
           stream: true,
           temperature: 0.0,
-          max_tokens: 10000
+          max_tokens: maxTokens
         })
       });
 
@@ -149,7 +151,8 @@ export default async function handler(req, res) {
     const geminiPayload = {
       contents,
       generationConfig: {
-        temperature: 0.0
+        temperature: 0.0,
+        maxOutputTokens: maxTokens
       }
     };
 

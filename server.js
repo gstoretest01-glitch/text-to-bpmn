@@ -7,6 +7,7 @@ import fetch from 'node-fetch';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { StringDecoder } from 'string_decoder';
 
 // Load environment variables from .env file
 dotenv.config();
@@ -166,6 +167,8 @@ app.post('/api/process', express.json({ limit: '50mb' }), async (req, res) => {
   const currentXml = req.body.currentXml;
   const isSpec = req.body.isSpec;
 
+  const maxTokens = parseInt(process.env.MAX_TOKENS || '65536', 10);
+
   let apiUrl = '';
   let apiKey = '';
   let modelName = '';
@@ -295,7 +298,8 @@ app.post('/api/process', express.json({ limit: '50mb' }), async (req, res) => {
       const geminiPayload = {
         contents,
         generationConfig: {
-          temperature: 0.0
+          temperature: 0.0,
+          maxOutputTokens: maxTokens
         }
       };
 
@@ -323,9 +327,10 @@ app.post('/api/process', express.json({ limit: '50mb' }), async (req, res) => {
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Connection', 'keep-alive');
 
+      const decoder = new StringDecoder('utf-8');
       let buffer = '';
       apiResponse.body.on('data', (chunk) => {
-        buffer += chunk.toString();
+        buffer += decoder.write(chunk);
 
         let braceCount = 0;
         let startIdx = -1;
@@ -396,7 +401,7 @@ app.post('/api/process', express.json({ limit: '50mb' }), async (req, res) => {
         messages: messages,
         stream: true,
         ...(modelName !== 'o3-2025-04-16' && { temperature: 0.0 }),
-        ...(isOpenRouter && { max_tokens: 10000 })
+        ...(isOpenRouter && { max_tokens: maxTokens })
       })
     });
     

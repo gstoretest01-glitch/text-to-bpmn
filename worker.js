@@ -161,6 +161,8 @@ app.post('/api/process', async (c) => {
   try {
     const { prompt: userPrompt, model: modelSelected, reasoner, history = [], image, currentXml, isSpec, isConsultant } = await c.req.json();
 
+    const maxTokens = parseInt(c.env.MAX_TOKENS || '65536', 10);
+
     let apiUrl = '';
     let apiKey = '';
     let modelName = '';
@@ -277,7 +279,8 @@ app.post('/api/process', async (c) => {
       const geminiPayload = {
         contents,
         generationConfig: {
-          temperature: 0.0
+          temperature: 0.0,
+          maxOutputTokens: maxTokens
         }
       };
 
@@ -391,7 +394,7 @@ app.post('/api/process', async (c) => {
         messages: messages,
         stream: true,
         ...(modelName !== 'o3-2025-04-16' && { temperature: 0.0 }),
-        ...(isOpenRouter && { max_tokens: 10000 })
+        ...(isOpenRouter && { max_tokens: maxTokens })
       })
     });
 

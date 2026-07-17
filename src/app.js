@@ -551,12 +551,21 @@ function stripXmlFromHistory(history) {
   });
 }
 
+function limitChatHistory(history, limit = 30) {
+  if (history.length <= limit) return history;
+  // Keep the first 2 messages (initial user request and initial bot response)
+  const initial = history.slice(0, 2);
+  // Take the remaining messages from the end to fill the limit
+  const recent = history.slice(history.length - (limit - 2));
+  return initial.concat(recent);
+}
+
 async function callModelAPI(prompt, history, image, currentXml, onDataChunk, isSpec = false, isConsultant = false) {
   const model = document.getElementById('global-model-select').value;
   const reasoner = document.getElementById('model-status').innerText.trim().toLowerCase() === 'on';
 
   let url = `${API_BASE_URL}/api/process`;
-  if (model === 'gemini') {
+  if (model === 'gemini' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
     url = 'https://text-to-bpmn20-main.vercel.app/api/v1/chat/completions';
   }
 
@@ -770,6 +779,21 @@ function finalizeBotMessage(ctx, startTime) {
     hljs.highlightAll();
   }
 
+  // Check if response does not contain XML, then append a confirmation button
+  const xmlResponse = extractXmlFromResponse(fullRaw);
+  if (!xmlResponse) {
+    const confirmBtn = document.createElement('button');
+    confirmBtn.className = 'new-chat-btn';
+    confirmBtn.style.width = 'auto';
+    confirmBtn.style.margin = '1rem 0 0 0';
+    confirmBtn.style.background = '#10b981'; // Green button for confirmation
+    confirmBtn.innerHTML = '<i class="fa-solid fa-diagram-project"></i> Xác nhận & Vẽ sơ đồ BPMN';
+    confirmBtn.addEventListener('click', () => {
+      sendPrompt("Xác nhận quy trình. Hãy tiến hành vẽ sơ đồ BPMN 2.0 XML chi tiết cho quy trình trên.");
+    });
+    botMessage.appendChild(confirmBtn);
+  }
+
   botMessage.appendChild(buildReplyInfo(startTime));
 }
 
@@ -919,24 +943,47 @@ async function sendPrompt(customText = null, imageBase64 = null, isAnalysis = fa
       return;
     }
 
-    const model = document.getElementById('global-model-select').value;
-    const importSuccess = await tryImportBpmn(xmlResponse, txt, imageBase64, ctx.fullRaw, model);
+    const xmlResponse = extractXmlFromResponse(ctx.fullRaw);
+    const isExpectingXml = xmlResponse !== null || txt.includes("Xác nhận quy trình") || txt.toLowerCase().includes("vẽ sơ đồ") || txt.toLowerCase().includes("diagram") || txt.toLowerCase().includes("xml");
 
-    if (importSuccess) {
-      pushToCustomHistory(xmlResponse);
+    if (isExpectingXml) {
+      const model = document.getElementById('global-model-select').value;
+      const importSuccess = await tryImportBpmn(xmlResponse, txt, imageBase64, ctx.fullRaw, model);
+
+      if (importSuccess) {
+        pushToCustomHistory(xmlResponse);
+        chatHistory.push({ role: 'user', content: txt });
+        chatHistory.push({ role: 'assistant', content: ctx.fullRaw });
+        chatHistory = limitChatHistory(chatHistory, 30);
+
+        // Update active session state
+        const activeSess = sessions.find(s => s.id === currentSessionId);
+        if (activeSess) {
+          activeSess.chatHistory = chatHistory;
+          activeSess.bpmnXml = xmlResponse;
+
+          // Auto-generate title on first turn (user msg + assistant response)
+          if (chatHistory.length === 2) {
+            const words = txt.split(/\s+/).slice(0, 5).join(' ');
+            activeSess.title = words || 'Sơ đồ mới';
+            renderSessionsList();
+          }
+
+          saveSessions();
+        }
+      }
+    } else {
+      // Phase 1: Drafting & Discussion, simply record chat history
       chatHistory.push({ role: 'user', content: txt });
       chatHistory.push({ role: 'assistant', content: ctx.fullRaw });
-      if (chatHistory.length > 10) {
-        chatHistory = chatHistory.slice(chatHistory.length - 10);
-      }
+      chatHistory = limitChatHistory(chatHistory, 30);
 
       // Update active session state
       const activeSess = sessions.find(s => s.id === currentSessionId);
       if (activeSess) {
         activeSess.chatHistory = chatHistory;
-        activeSess.bpmnXml = xmlResponse;
-
-        // Auto-generate title on first turn (user msg + assistant response)
+        
+        // Auto-generate title on first turn
         if (chatHistory.length === 2) {
           const words = txt.split(/\s+/).slice(0, 5).join(' ');
           activeSess.title = words || 'Sơ đồ mới';
