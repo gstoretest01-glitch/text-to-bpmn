@@ -1,4 +1,3 @@
-OKKO
 
 # TÀI LIỆU SRS MẪU CHUẨN & QUY TẮC TUÂN THỦ (BA STANDARD)
 

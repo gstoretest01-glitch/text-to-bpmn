@@ -92,7 +92,7 @@ export default async function handler(req, res) {
 
       if (!googleRes.ok) {
         const errText = await googleRes.text();
-        return res.status(googleRes.status).send(errText);
+        return res.status(googleRes.status).json({ error: 'OpenRouter API Error', details: errText });
       }
 
       res.setHeader('Content-Type', 'text/event-stream');
@@ -162,19 +162,39 @@ export default async function handler(req, res) {
       };
     }
 
-    const googleUrl = `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:streamGenerateContent?key=${apiKey}`;
+    const geminiFallbackModels = reasoner 
+      ? ['gemini-2.5-pro', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-3.1-flash-lite']
+      : ['gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-3.1-flash-lite'];
 
-    const googleRes = await fetch(googleUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(geminiPayload)
-    });
+    const apiKeysList = (apiKey || '').split(',').map(k => k.trim()).filter(Boolean);
+    let googleRes = null;
+    let errText = '';
 
-    if (!googleRes.ok) {
-      const errText = await googleRes.text();
-      return res.status(googleRes.status).send(errText);
+    outerLoop:
+    for (const candidateModel of geminiFallbackModels) {
+      for (const currentKey of apiKeysList) {
+        const googleUrl = `https://generativelanguage.googleapis.com/v1beta/models/${candidateModel}:streamGenerateContent?key=${currentKey}`;
+
+        googleRes = await fetch(googleUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(geminiPayload)
+        });
+
+        if (googleRes.ok) {
+          console.log(`[GEMINI-SUCCESS] Connected to model '${candidateModel}' using Key ...${currentKey.slice(-6)}`);
+          break outerLoop;
+        }
+
+        errText = await googleRes.text();
+        console.warn(`[GEMINI-FALLBACK] Model '${candidateModel}' (Key ...${currentKey.slice(-6)}) failed with status ${googleRes.status}: ${errText.slice(0, 150)}. Trying next option...`);
+      }
+    }
+
+    if (!googleRes || !googleRes.ok) {
+      return res.status(googleRes?.status || 500).json({ error: 'API Error', details: errText || 'All Gemini keys and fallback models limits exceeded' });
     }
 
     // Stream translated OpenAI chunks to browser

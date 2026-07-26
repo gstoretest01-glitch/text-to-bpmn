@@ -53,6 +53,17 @@ function writeDb(db) {
 }
 
 
+// Enable CORS for frontend requests on different ports (e.g. 8085)
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-User, X-Task-Id');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
+  next();
+});
+
 // Serve static files (HTML, CSS, JS) from 'public' directory
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -157,6 +168,44 @@ app.post('/api/auth/sync', express.json({ limit: '100mb' }), (req, res) => {
   res.json({ success: true });
 });
 
+/* ─────────── BACKGROUND TASKS CACHE ─────────── */
+const recentTasksCache = new Map();
+
+function cacheCompletedTask(taskId, prompt, fullText, model) {
+  let xml = '';
+  const xmlMatch = fullText.match(/```xml([\s\S]*?)```/) || fullText.match(/(<bpmn:definitions[\s\S]*?<\/bpmn:definitions>)/);
+  if (xmlMatch) {
+    xml = xmlMatch[1].trim();
+  }
+
+  const taskData = {
+    taskId,
+    prompt,
+    fullText,
+    xml,
+    model,
+    status: 'completed',
+    timestamp: Date.now(),
+    completedAt: new Date().toISOString()
+  };
+
+  recentTasksCache.set(taskId, taskData);
+  if (recentTasksCache.size > 20) {
+    const oldestKey = recentTasksCache.keys().next().value;
+    recentTasksCache.delete(oldestKey);
+  }
+  console.log(`[BACKGROUND-TASK] Task '${taskId}' completed and cached successfully (${fullText.length} chars, XML: ${xml ? 'Yes' : 'No'}).`);
+}
+
+app.get('/api/tasks/latest', (req, res) => {
+  if (recentTasksCache.size === 0) {
+    return res.json({ task: null });
+  }
+  const tasksArray = Array.from(recentTasksCache.values());
+  const latestTask = tasksArray[tasksArray.length - 1];
+  res.json({ task: latestTask });
+});
+
 /* ─────────── BACKEND PROXY FOR EXTERNAL LLM APIs ─────────── */
 app.post('/api/process', express.json({ limit: '50mb' }), async (req, res) => {
   const userPrompt = req.body.prompt;
@@ -166,6 +215,23 @@ app.post('/api/process', express.json({ limit: '50mb' }), async (req, res) => {
   const image = req.body.image;
   const currentXml = req.body.currentXml;
   const isSpec = req.body.isSpec;
+
+  const taskId = req.body.taskId || `task_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  let isClientConnected = true;
+
+  req.on('close', () => {
+    if (isClientConnected) {
+      isClientConnected = false;
+      console.log(`[STREAM] Client disconnected for task '${taskId}'. Server will continue generating in background...`);
+    }
+  });
+
+  res.on('close', () => {
+    if (isClientConnected) {
+      isClientConnected = false;
+      console.log(`[STREAM] Connection closed for task '${taskId}'. Server will continue generating in background...`);
+    }
+  });
 
   const maxTokens = parseInt(process.env.MAX_TOKENS || '65536', 10);
 
@@ -256,7 +322,11 @@ app.post('/api/process', express.json({ limit: '50mb' }), async (req, res) => {
     if (modelSelected === 'gemini' && !isOpenRouter) {
       const generateMethod = 'streamGenerateContent';
       const proxyBase = process.env.GEMINI_PROXY_URL || 'https://generativelanguage.googleapis.com';
-      apiUrl = `${proxyBase}/v1beta/models/${modelName}:${generateMethod}?key=${apiKey}`;
+
+      // Danh sách model ưu tiên từ tốt nhất đến thấp hơn / lite
+      const geminiFallbackModels = reasoner 
+        ? ['gemini-2.5-pro', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-3.1-flash-lite']
+        : ['gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-3.1-flash-lite'];
 
       // Translate OpenAI messages to Gemini contents
       let systemInstructionText = '';
@@ -309,26 +379,49 @@ app.post('/api/process', express.json({ limit: '50mb' }), async (req, res) => {
         };
       }
 
-      const apiResponse = await fetch(apiUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(geminiPayload)
-      });
+      const apiKeysList = (apiKey || '').split(',').map(k => k.trim()).filter(Boolean);
+      let apiResponse = null;
+      let lastErrorText = '';
+      let activeModel = modelName;
 
-      if (!apiResponse.ok) {
-        const errorText = await apiResponse.text();
-        console.error(`Upstream Gemini API error ${apiResponse.status}: ${errorText}`);
-        return res.status(apiResponse.status).json({ error: 'API Error', details: errorText });
+      outerLoop:
+      for (const candidateModel of geminiFallbackModels) {
+        activeModel = candidateModel;
+        for (const currentKey of apiKeysList) {
+          const currentUrl = `${proxyBase}/v1beta/models/${candidateModel}:${generateMethod}?key=${currentKey}`;
+          
+          apiResponse = await fetch(currentUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(geminiPayload)
+          });
+
+          if (apiResponse.ok) {
+            console.log(`[GEMINI-SUCCESS] Connected to model '${candidateModel}' using API Key ...${currentKey.slice(-6)}`);
+            break outerLoop;
+          }
+
+          lastErrorText = await apiResponse.text();
+          console.warn(`[GEMINI-FALLBACK] Model '${candidateModel}' (Key ...${currentKey.slice(-6)}) failed with status ${apiResponse.status}: ${lastErrorText.slice(0, 150)}. Trying next option...`);
+        }
+      }
+
+      if (!apiResponse || !apiResponse.ok) {
+        console.error(`[GEMINI-ERROR] All API keys and fallback models failed. Last error status ${apiResponse?.status}: ${lastErrorText}`);
+        return res.status(apiResponse?.status || 500).json({ error: 'API Error (All Gemini keys & fallback models limit exceeded)', details: lastErrorText });
       }
 
       res.setHeader('Content-Type', 'text/plain; charset=utf-8');
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Connection', 'keep-alive');
+      res.setHeader('X-Task-Id', taskId);
 
       const decoder = new StringDecoder('utf-8');
       let buffer = '';
+      let accumulatedText = '';
+
       apiResponse.body.on('data', (chunk) => {
         buffer += decoder.write(chunk);
 
@@ -353,18 +446,21 @@ app.post('/api/process', express.json({ limit: '50mb' }), async (req, res) => {
                 const contentText = chunkObj.candidates?.[0]?.content?.parts?.[0]?.text || '';
                 
                 if (contentText) {
-                  const openAiChunk = {
-                    id: 'chatcmpl-' + Date.now(),
-                    object: 'chat.completion.chunk',
-                    created: Math.floor(Date.now() / 1000),
-                    model: modelName,
-                    choices: [{
-                      index: 0,
-                      delta: { content: contentText },
-                      finish_reason: null
-                    }]
-                  };
-                  res.write(`data: ${JSON.stringify(openAiChunk)}\n\n`);
+                  accumulatedText += contentText;
+                  if (isClientConnected && res.writable && !res.writableEnded) {
+                    const openAiChunk = {
+                      id: 'chatcmpl-' + Date.now(),
+                      object: 'chat.completion.chunk',
+                      created: Math.floor(Date.now() / 1000),
+                      model: activeModel,
+                      choices: [{
+                        index: 0,
+                        delta: { content: contentText },
+                        finish_reason: null
+                      }]
+                    };
+                    res.write(`data: ${JSON.stringify(openAiChunk)}\n\n`);
+                  }
                 }
               } catch (e) {
                 // Wait for valid JSON chunks
@@ -378,13 +474,18 @@ app.post('/api/process', express.json({ limit: '50mb' }), async (req, res) => {
       });
 
       apiResponse.body.on('end', () => {
-        res.write('data: [DONE]\n\n');
-        res.end();
+        cacheCompletedTask(taskId, userPrompt, accumulatedText, activeModel);
+        if (isClientConnected && res.writable && !res.writableEnded) {
+          res.write('data: [DONE]\n\n');
+          res.end();
+        }
       });
 
       apiResponse.body.on('error', (err) => {
         console.error('Stream error:', err);
-        res.status(500).json({ error: 'Error while streaming response' });
+        if (isClientConnected && res.writable && !res.writableEnded) {
+          res.status(500).json({ error: 'Error while streaming response' });
+        }
       });
 
       return;
@@ -414,26 +515,51 @@ app.post('/api/process', express.json({ limit: '50mb' }), async (req, res) => {
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Task-Id', taskId);
+
+    let accumulatedText = '';
 
     apiResponse.body.on('data', (chunk) => {
-      res.write(chunk);
+      const chunkStr = chunk.toString('utf-8');
+      const lines = chunkStr.split('\n');
+      for (const line of lines) {
+        if (line.startsWith('data:') && !line.includes('[DONE]')) {
+          try {
+            const jsonStr = line.slice(5).trim();
+            const parsed = JSON.parse(jsonStr);
+            const delta = parsed.choices?.[0]?.delta?.content || '';
+            if (delta) accumulatedText += delta;
+          } catch (e) {}
+        }
+      }
+
+      if (isClientConnected && res.writable && !res.writableEnded) {
+        res.write(chunk);
+      }
     });
 
     apiResponse.body.on('end', () => {
-      res.end();
+      cacheCompletedTask(taskId, userPrompt, accumulatedText, modelName);
+      if (isClientConnected && res.writable && !res.writableEnded) {
+        res.end();
+      }
     });
 
     apiResponse.body.on('error', (err) => {
       console.error('Stream error:', err);
-      res.status(500).json({ error: 'Error while streaming response' });
+      if (isClientConnected && res.writable && !res.writableEnded) {
+        res.status(500).json({ error: 'Error while streaming response' });
+      }
     });
 
   } catch (error) {
     console.error('Streaming error:', error);
-    res.status(500).json({
-      error: 'Streaming API error',
-      details: error.message
-    });
+    if (isClientConnected && res.writable && !res.writableEnded) {
+      res.status(500).json({
+        error: 'Streaming API error',
+        details: error.message
+      });
+    }
   }
 });
 

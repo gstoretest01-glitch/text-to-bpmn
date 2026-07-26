@@ -18,12 +18,62 @@ const modeler = new BpmnModeler({
   linting: { bpmnlint: lintConfig }
 });
 
-const API_BASE_URL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
-  ? '' 
+const API_BASE_URL = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') 
+  ? (window.location.port === '3000' || !window.location.port ? '' : 'http://localhost:3000') 
   : 'https://api-bpmn.tungdemo.site';
 
 // active linting panel right away
 modeler.get('linting').toggle();
+
+/* ─────────── AUTOMATIC BACKGROUND TASK RECOVERY ─────────── */
+async function checkAndRestoreBackgroundTask() {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/tasks/latest`);
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data || !data.task) return;
+
+    const task = data.task;
+    const lastRestoredTaskId = localStorage.getItem('last_restored_task_id');
+    if (task.taskId === lastRestoredTaskId) return;
+
+    const ageInMinutes = (Date.now() - task.timestamp) / (1000 * 60);
+    if (ageInMinutes > 15) return;
+
+    console.log('[BACKGROUND-RECOVERY] Found recently completed background task:', task);
+
+    if (task.fullText || task.xml) {
+      const promptSnippet = task.prompt ? task.prompt.slice(0, 50) : 'vừa tạo';
+      const restoreConfirmed = confirm(`🎉 Hệ thống đã hoàn thành phản hồi trong nền cho yêu cầu: "${promptSnippet}..."!\n\nBạn có muốn khôi phục phản hồi này vào màn hình chat ngay không?`);
+      if (restoreConfirmed) {
+        localStorage.setItem('last_restored_task_id', task.taskId);
+        
+        if (task.xml) {
+          await modeler.importXML(task.xml);
+          pushToCustomHistory(task.xml);
+        }
+        
+        if (typeof addBotMessage === 'function' && task.fullText) {
+          addBotMessage(task.fullText);
+        }
+        
+        if (typeof sessions !== 'undefined' && Array.isArray(sessions)) {
+          const activeSess = sessions.find(s => s.id === currentSessionId);
+          if (activeSess) {
+            if (task.xml) activeSess.bpmnXml = task.xml;
+            if (typeof saveSessions === 'function') saveSessions();
+          }
+        }
+      } else {
+        localStorage.setItem('last_restored_task_id', task.taskId);
+      }
+    }
+  } catch (err) {
+    console.error("Failed checking background tasks:", err);
+  }
+}
+
+setTimeout(checkAndRestoreBackgroundTask, 1500);
 
 let customHistory = [];
 let customHistoryIndex = -1;
@@ -446,6 +496,7 @@ async function switchSession(id, saveCurrent = true) {
         
         botMsg.appendChild(header);
         botMsg.appendChild(content);
+        appendConfirmationButtonIfNeeded(botMsg, msg.content);
       }
       chatLog.appendChild(botMsg);
     }
@@ -780,21 +831,28 @@ function finalizeBotMessage(ctx, startTime) {
   }
 
   // Check if response does not contain XML, then append a confirmation button
+  appendConfirmationButtonIfNeeded(botMessage, fullRaw);
+
+  botMessage.appendChild(buildReplyInfo(startTime));
+}
+
+function appendConfirmationButtonIfNeeded(container, fullRaw) {
+  if (!container || !fullRaw) return;
   const xmlResponse = extractXmlFromResponse(fullRaw);
   if (!xmlResponse) {
+    if (container.querySelector('.btn-confirm-action')) return;
+    
     const confirmBtn = document.createElement('button');
-    confirmBtn.className = 'new-chat-btn';
+    confirmBtn.className = 'new-chat-btn btn-confirm-action';
     confirmBtn.style.width = 'auto';
     confirmBtn.style.margin = '1rem 0 0 0';
     confirmBtn.style.background = '#10b981'; // Green button for confirmation
-    confirmBtn.innerHTML = '<i class="fa-solid fa-diagram-project"></i> Xác nhận & Vẽ sơ đồ BPMN';
+    confirmBtn.innerHTML = '<i class="fa-solid fa-diagram-project"></i> ✅ Xác nhận & Tiến hành vẽ sơ đồ BPMN';
     confirmBtn.addEventListener('click', () => {
       sendPrompt("Xác nhận quy trình. Hãy tiến hành vẽ sơ đồ BPMN 2.0 XML chi tiết cho quy trình trên.");
     });
-    botMessage.appendChild(confirmBtn);
+    container.appendChild(confirmBtn);
   }
-
-  botMessage.appendChild(buildReplyInfo(startTime));
 }
 
 // Compute the response time and displays it

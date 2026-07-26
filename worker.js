@@ -237,7 +237,11 @@ app.post('/api/process', async (c) => {
     if (modelSelected === 'gemini' && !isOpenRouter) {
       const generateMethod = 'streamGenerateContent';
       const proxyBase = c.env.GEMINI_PROXY_URL || 'https://generativelanguage.googleapis.com';
-      apiUrl = `${proxyBase}/v1beta/models/${modelName}:${generateMethod}?key=${apiKey}`;
+
+      // Danh sách model ưu tiên từ tốt nhất đến thấp hơn / lite
+      const geminiFallbackModels = reasoner 
+        ? ['gemini-2.5-pro', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-3.1-flash-lite']
+        : ['gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-3.1-flash-lite'];
 
       // Translate OpenAI messages to Gemini contents
       let systemInstructionText = '';
@@ -290,18 +294,34 @@ app.post('/api/process', async (c) => {
         };
       }
 
-      const apiResponse = await fetch(apiUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(geminiPayload)
-      });
+      let apiResponse = null;
+      let lastErrorText = '';
+      let activeModel = modelName;
 
-      if (!apiResponse.ok) {
-        const errorText = await apiResponse.text();
-        console.error(`Upstream Gemini API error ${apiResponse.status}: ${errorText}`);
-        return c.json({ error: 'API Error', details: errorText }, apiResponse.status);
+      for (const candidateModel of geminiFallbackModels) {
+        activeModel = candidateModel;
+        const currentUrl = `${proxyBase}/v1beta/models/${candidateModel}:${generateMethod}?key=${apiKey}`;
+        
+        apiResponse = await fetch(currentUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(geminiPayload)
+        });
+
+        if (apiResponse.ok) {
+          console.log(`[GEMINI-SUCCESS] Connected to model: ${candidateModel}`);
+          break;
+        }
+
+        lastErrorText = await apiResponse.text();
+        console.warn(`[GEMINI-FALLBACK] Model '${candidateModel}' failed with status ${apiResponse.status}: ${lastErrorText.slice(0, 150)}. Switching to next model...`);
+      }
+
+      if (!apiResponse || !apiResponse.ok) {
+        console.error(`[GEMINI-ERROR] All fallback models failed. Last error status ${apiResponse?.status}: ${lastErrorText}`);
+        return c.json({ error: 'API Error (All Gemini fallback models limit exceeded)', details: lastErrorText }, apiResponse?.status || 500);
       }
 
       // Convert Gemini stream to OpenAI SSE stream format
