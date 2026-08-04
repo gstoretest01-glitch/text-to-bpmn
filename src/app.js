@@ -265,6 +265,15 @@ async function syncSessionsWithServer() {
     }
   }
 
+  // Sanitize sessions payload to stay well within Cloudflare D1 / JSON payload limits
+  const lightSessions = (sessions || []).slice(0, 50).map(s => ({
+    id: s.id,
+    title: s.title || 'Untitled',
+    chatHistory: (s.chatHistory || []).slice(-30),
+    bpmnXml: s.bpmnXml || '',
+    createdAt: s.createdAt || Date.now()
+  }));
+
   try {
     const response = await fetch(`${API_BASE_URL}/api/auth/sync`, {
       method: 'POST',
@@ -272,7 +281,7 @@ async function syncSessionsWithServer() {
         'Content-Type': 'application/json',
         'x-user': authUser
       },
-      body: JSON.stringify({ sessions })
+      body: JSON.stringify({ sessions: lightSessions })
     });
     if (!response.ok) {
       console.error('Failed to sync sessions with server', response.statusText);
@@ -1535,7 +1544,7 @@ function showAuthModal(show = true) {
 function updateAuthModalUI() {
   const title = document.getElementById('auth-modal-title');
   const submitBtn = document.getElementById('auth-submit-btn');
-  const toggleLink = document.getElementById('auth-toggle-link');
+  const toggleText = document.querySelector('.auth-toggle-text');
   const errorMsg = document.getElementById('auth-error-msg');
   
   errorMsg.textContent = '';
@@ -1545,21 +1554,31 @@ function updateAuthModalUI() {
   if (isLoginForm) {
     title.textContent = 'Đăng Nhập';
     submitBtn.textContent = 'Đăng Nhập';
-    toggleLink.innerHTML = 'Chưa có tài khoản? <a href="#" id="auth-toggle-link-inner">Đăng ký ngay</a>';
-    document.getElementById('auth-toggle-link-inner').addEventListener('click', (e) => {
-      e.preventDefault();
-      isLoginForm = false;
-      updateAuthModalUI();
-    });
+    if (toggleText) {
+      toggleText.innerHTML = 'Chưa có tài khoản? <a href="#" id="auth-toggle-link">Đăng ký ngay</a>';
+      const link = document.getElementById('auth-toggle-link');
+      if (link) {
+        link.addEventListener('click', (e) => {
+          e.preventDefault();
+          isLoginForm = false;
+          updateAuthModalUI();
+        });
+      }
+    }
   } else {
     title.textContent = 'Đăng Ký Tài Khoản';
     submitBtn.textContent = 'Đăng Ký';
-    toggleLink.innerHTML = 'Đã có tài khoản? <a href="#" id="auth-toggle-link-inner">Đăng nhập</a>';
-    document.getElementById('auth-toggle-link-inner').addEventListener('click', (e) => {
-      e.preventDefault();
-      isLoginForm = true;
-      updateAuthModalUI();
-    });
+    if (toggleText) {
+      toggleText.innerHTML = 'Đã có tài khoản? <a href="#" id="auth-toggle-link">Đăng nhập</a>';
+      const link = document.getElementById('auth-toggle-link');
+      if (link) {
+        link.addEventListener('click', (e) => {
+          e.preventDefault();
+          isLoginForm = true;
+          updateAuthModalUI();
+        });
+      }
+    }
   }
 }
 
@@ -1597,12 +1616,17 @@ async function handleAuthSubmit(e) {
       if (data.sessions && data.sessions.length > 0) {
         sessions = data.sessions;
         currentSessionId = sessions[0].id;
+        saveSessions();
         switchSession(currentSessionId, false);
       } else {
         syncSessionsWithServer();
       }
     } else {
+      // Synchronize current local sessions to newly created account
       syncSessionsWithServer();
+      if (typeof addBotMessage === 'function') {
+        addBotMessage('🎉 **Đăng ký tài khoản thành công!** Bạn đã đăng nhập tự động và các sơ đồ hiện tại đã được liên kết với tài khoản của bạn.');
+      }
     }
   } catch (err) {
     console.error('Auth error', err);
